@@ -339,8 +339,8 @@
 </div>
 
 <div class="controls">
-  <button id="fatten" type="button">Fatten-up! 🎈</button>
   <button id="slim" type="button">Slim 'er down! 📏</button>
+  <button id="fatten" type="button">Fatten-up! 🎈</button>
 </div>
 <div class="secondary">
   <button id="reset" type="button">Reset</button>
@@ -386,13 +386,23 @@
   canvas.width = CANVAS_SIZE;
   canvas.height = CANVAS_SIZE;
 
-  const STEP = 1.08; // how much each click stretches/squeezes
-  // Effectively unlimited in either direction — these only exist as a
-  // safety floor/ceiling so scaleX can never hit exactly 0 or run away to
-  // Infinity, not as a real gameplay limit.
-  const MIN_SCALE = 0.0001;
-  const MAX_SCALE = 1e6;
-  let scaleX = 1;
+  // The undistorted, cover-cropped photo is drawn here first; the visible
+  // canvas is then filled by resampling from this circular "bulge" warp so
+  // the middle of the photo balloons out or caves in while the corners of
+  // the square stay anchored — a blob effect, not a plain zoom.
+  const baseCanvas = document.createElement("canvas");
+  baseCanvas.width = CANVAS_SIZE;
+  baseCanvas.height = CANVAS_SIZE;
+  const baseCtx = baseCanvas.getContext("2d");
+
+  const CENTER = CANVAS_SIZE / 2;
+  const BULGE_RADIUS = CANVAS_SIZE * 0.5; // reaches the square's edges; corners stay untouched
+  const BULGE_STEP = 0.035; // how much each feed/click nudges the blob
+  // Kept just short of +-1: at exactly 1 the very center pixel would sample
+  // from a single point and beyond it the center starts mirroring itself.
+  const MIN_BULGE = -0.95;
+  const MAX_BULGE = 0.95;
+  let bulge = 0; // 0 = untouched; positive = fattened blob; negative = pinched
   let cover = { dw: CANVAS_SIZE, dh: CANVAS_SIZE };
 
   const img = new Image();
@@ -401,28 +411,67 @@
     // center the overflow so it gets cropped evenly off both edges.
     const scale = Math.max(CANVAS_SIZE / img.naturalWidth, CANVAS_SIZE / img.naturalHeight);
     cover = { dw: img.naturalWidth * scale, dh: img.naturalHeight * scale };
-    scaleX = 1;
+    bulge = 0;
     draw();
   };
 
-  function draw() {
-    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-
-    // Same scale factor drives both axes, so fattening/slimming grows or
-    // shrinks the photo from its center in both directions at once.
-    const w = cover.dw * scaleX;
-    const h = cover.dh * scaleX;
-    const x = (CANVAS_SIZE - w) / 2;
-    const y = (CANVAS_SIZE - h) / 2;
-    ctx.drawImage(img, x, y, w, h);
+  function drawBase() {
+    baseCtx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    baseCtx.fillStyle = "#ffffff";
+    baseCtx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    baseCtx.imageSmoothingEnabled = true;
+    baseCtx.imageSmoothingQuality = "high";
+    baseCtx.drawImage(img, (CANVAS_SIZE - cover.dw) / 2, (CANVAS_SIZE - cover.dh) / 2, cover.dw, cover.dh);
   }
 
-  function setScale(next) {
-    scaleX = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+  function draw() {
+    drawBase();
+
+    if (Math.abs(bulge) < 0.001) {
+      ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+      ctx.drawImage(baseCanvas, 0, 0);
+      return;
+    }
+
+    // Radial warp: for every output pixel within BULGE_RADIUS of center,
+    // sample the source from a point pulled closer to center (bulge, so
+    // the middle stretches out to fill more space) or pushed farther out
+    // (pinch, so the middle gets squeezed toward the edges). The pull
+    // fades to nothing at the radius edge so it blends smoothly into the
+    // untouched outer photo/corners.
+    const src = baseCtx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE).data;
+    const out = ctx.createImageData(CANVAS_SIZE, CANVAS_SIZE);
+    const dst = out.data;
+    const R = BULGE_RADIUS;
+
+    for (let y = 0; y < CANVAS_SIZE; y++) {
+      const dy = y - CENTER;
+      for (let x = 0; x < CANVAS_SIZE; x++) {
+        const dx = x - CENTER;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        let sx = x, sy = y;
+        if (dist < R) {
+          const percent = 1 - dist / R;
+          const factor = 1 - bulge * percent * percent;
+          sx = CENTER + dx * factor;
+          sy = CENTER + dy * factor;
+        }
+        const ix = sx < 0 ? 0 : sx > CANVAS_SIZE - 1 ? CANVAS_SIZE - 1 : (sx + 0.5) | 0;
+        const iy = sy < 0 ? 0 : sy > CANVAS_SIZE - 1 ? CANVAS_SIZE - 1 : (sy + 0.5) | 0;
+        const di = (y * CANVAS_SIZE + x) * 4;
+        const si = (iy * CANVAS_SIZE + ix) * 4;
+        dst[di] = src[si];
+        dst[di + 1] = src[si + 1];
+        dst[di + 2] = src[si + 2];
+        dst[di + 3] = src[si + 3];
+      }
+    }
+
+    ctx.putImageData(out, 0, 0);
+  }
+
+  function setBulge(next) {
+    bulge = Math.min(MAX_BULGE, Math.max(MIN_BULGE, next));
     draw();
   }
 
@@ -489,10 +538,10 @@
     img.src = src;
   }
 
-  document.getElementById("fatten").addEventListener("click", () => setScale(scaleX * STEP));
-  document.getElementById("slim").addEventListener("click", () => setScale(scaleX / STEP));
+  document.getElementById("fatten").addEventListener("click", () => setBulge(bulge + BULGE_STEP));
+  document.getElementById("slim").addEventListener("click", () => setBulge(bulge - BULGE_STEP));
   document.getElementById("reset").addEventListener("click", () => {
-    setScale(1);
+    setBulge(0);
     appleCount = 0;
     donutCount = 0;
     updateStats();
@@ -609,7 +658,7 @@
         "💥",
         `POP! You've fed it ${FEED_THRESHOLD} donuts.`,
         () => { donutCount = 0; updateStats(); }, // continue: keep the current fatten/slim level
-        () => { donutCount = 0; appleCount = 0; setScale(1); updateStats(); } // reset: start over
+        () => { donutCount = 0; appleCount = 0; setBulge(0); updateStats(); } // reset: start over
       );
     }, 900);
   }
@@ -625,7 +674,7 @@
         "🕳️",
         `Sucked into a black hole! You've fed it ${FEED_THRESHOLD} apples.`,
         () => { appleCount = 0; updateStats(); }, // continue: keep the current fatten/slim level
-        () => { appleCount = 0; donutCount = 0; setScale(1); updateStats(); } // reset: start over
+        () => { appleCount = 0; donutCount = 0; setBulge(0); updateStats(); } // reset: start over
       );
     }, 900);
   }
@@ -671,7 +720,7 @@
       token.classList.remove("dragging");
       if (!dragClone) return;
       if (isOverStage(e.clientX, e.clientY)) {
-        setScale(dragEffect === "slim" ? scaleX / STEP : scaleX * STEP);
+        setBulge(dragEffect === "slim" ? bulge - BULGE_STEP : bulge + BULGE_STEP);
         bounceStage();
         bumpFeedCount(dragEffect);
       }
