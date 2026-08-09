@@ -393,16 +393,14 @@
   const MIN_SCALE = 0.0001;
   const MAX_SCALE = 1e6;
   let scaleX = 1;
-  let cover = { dw: CANVAS_SIZE, dh: CANVAS_SIZE, dx: 0, dy: 0 };
+  let cover = { dw: CANVAS_SIZE, dh: CANVAS_SIZE };
 
   const img = new Image();
   img.onload = () => {
     // "Cover" fit: scale so the shorter side exactly fills the square, then
     // center the overflow so it gets cropped evenly off both edges.
     const scale = Math.max(CANVAS_SIZE / img.naturalWidth, CANVAS_SIZE / img.naturalHeight);
-    const dw = img.naturalWidth * scale;
-    const dh = img.naturalHeight * scale;
-    cover = { dw, dh, dx: (CANVAS_SIZE - dw) / 2, dy: (CANVAS_SIZE - dh) / 2 };
+    cover = { dw: img.naturalWidth * scale, dh: img.naturalHeight * scale };
     scaleX = 1;
     draw();
   };
@@ -414,9 +412,13 @@
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
 
+    // Same scale factor drives both axes, so fattening/slimming grows or
+    // shrinks the photo from its center in both directions at once.
     const w = cover.dw * scaleX;
+    const h = cover.dh * scaleX;
     const x = (CANVAS_SIZE - w) / 2;
-    ctx.drawImage(img, x, cover.dy, w, cover.dh);
+    const y = (CANVAS_SIZE - h) / 2;
+    ctx.drawImage(img, x, y, w, h);
   }
 
   function setScale(next) {
