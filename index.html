@@ -387,8 +387,11 @@
   canvas.height = CANVAS_SIZE;
 
   const STEP = 1.08; // how much each click stretches/squeezes
-  const MIN_SCALE = 0.2;
-  const MAX_SCALE = 4;
+  // Effectively unlimited in either direction — these only exist as a
+  // safety floor/ceiling so scaleX can never hit exactly 0 or run away to
+  // Infinity, not as a real gameplay limit.
+  const MIN_SCALE = 0.0001;
+  const MAX_SCALE = 1e6;
   let scaleX = 1;
   let cover = { dw: CANVAS_SIZE, dh: CANVAS_SIZE, dx: 0, dy: 0 };
 
